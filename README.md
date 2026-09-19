@@ -1,6 +1,6 @@
 # SlotLock — 서강대학교 스터디룸 예약 MVP
 
-**Team:** A+ 원정대 · **Course:** CSE4022  
+**Team:** A+ 원정대 · **Course:** CSE4022
 **Goal:** Prove that concurrent bookings cannot double-book the same space/time using PostgreSQL `EXCLUDE USING gist` (`btree_gist`).
 
 한국어 요약: 스터디룸 예약 시스템 MVP입니다. 동일 공간의 시간 겹침은 DB exclusion constraint로 차단되며, 동시 요청 시 하나만 성공하고 나머지는 HTTP **409 Conflict**를 받습니다.
@@ -9,90 +9,68 @@
 
 ---
 
-
-## 학교 VDI에서 실행 (Ubuntu)
-
-1. 채팅에서 받은 `SlotLock_MVP.tar.gz`를 VDI로 복사한다.
-2. 터미널에서:
+## 빠르게 실행하기
 
 ```bash
-tar -xzf SlotLock_MVP.tar.gz
 cd slotlock
 docker compose up --build
-# 구버전이면: docker-compose up --build
+# 구버전 Docker면: docker-compose up --build
 ```
 
-3. 브라우저:
-   - 화면: http://localhost:3000
-   - API 문서: http://localhost:8000/docs
-4. 로그인: `student@slotlock.local` / `student123`
-5. 데모: 같은 방·같은 시간에 두 번 예약해 보면 두 번째는 **409**로 막힌다.
+| 서비스 | 주소 |
+|---|---|
+| 웹 화면 | http://localhost:3000 |
+| API | http://localhost:8000 |
+| API 문서(Swagger) | http://localhost:8000/docs |
+| Postgres | localhost:5432 (`slotlock` / `slotlock`) |
+| Redis | localhost:6379 |
 
-VDI에 Docker가 없으면 관리자/실습 안내대로 Docker(또는 docker-compose)만 설치한 뒤 위 명령을 다시 실행하면 된다.
+데모 계정 (API 기동 시 자동 시딩):
 
----
-## Quick start
+| 이메일/아이디 | 비밀번호 | 역할 |
+|---|---|---|
+| `student@slotlock.local` | `student123` | 학생 |
+| `admin` | `admin` | 관리자 |
 
-### Option A — Docker Compose (recommended)
+> **WSL2에서 개발 중이라면:** 모든 서비스에 `restart: unless-stopped`가 걸려 있어서 Docker 데몬이 재시작돼도 컨테이너는 알아서 돌아옵니다. WSL VM 자체가 유휴 상태로 꺼졌다면 `cd slotlock && docker compose up -d` 한 번만 다시 실행하면 됩니다. WSL이 자동으로 안 꺼지게 하려면 `%UserProfile%\.wslconfig`의 `[wsl2]`에 `vmIdleTimeout=-1`을 추가하고 `wsl --shutdown` 한 번 해주세요.
 
-```bash
-cd /workspace/slotlock
-docker compose config          # or: docker-compose config
-docker compose up --build      # or: docker-compose up --build
-```
-
-> **Note (WSL2 dev machines):** All services have `restart: unless-stopped`, so they come back on
-> their own if the Docker daemon bounces. If the WSL VM itself was shut down (e.g. it went idle),
-> just `cd slotlock && docker compose up -d` again. To stop WSL from idling out on its own, add
-> `vmIdleTimeout=-1` under `[wsl2]` in `%UserProfile%\.wslconfig` and `wsl --shutdown` once.
-
-> **Note (sandbox / some VMs):** If containers cannot reach each other on the bridge network,
-> ensure Docker uses `iptables-legacy` (`update-alternatives --set iptables /usr/sbin/iptables-legacy`)
-> and restart `dockerd`. Standard Linux desktops usually work without this.
-
-| Service | URL |
-|---------|-----|
-| Web UI  | http://localhost:3000 |
-| API     | http://localhost:8000 |
-| OpenAPI | http://localhost:8000/docs |
-| Postgres| localhost:5432 (`slotlock` / `slotlock`) |
-| Redis   | localhost:6379 |
-
-Demo accounts (seeded on API startup):
-
-| Email | Password | Role |
-|-------|----------|------|
-| `student@slotlock.local` | `student123` | student |
-| `admin` | `admin` | admin |
-
-Log in as admin and open **관리자 설정** in the nav (`/admin/settings`) to change the daily booking
-limit, slot size, and check-in grace period at runtime — no redeploy needed.
-
-### Option B — Local (Postgres + Redis already running)
-
-```bash
-# Backend
-cd /workspace/slotlock/backend
-python -m venv ../../slotlock-venv && source ../../slotlock-venv/bin/activate
-pip install -r requirements.txt
-export DATABASE_URL=postgresql+psycopg2://slotlock:slotlock@localhost:5432/slotlock
-export REDIS_URL=redis://localhost:6379/0
-export PYTHONPATH=.
-alembic upgrade head   # or rely on startup create_all + seed
-python scripts/seed.py
-uvicorn app.main:app --reload --port 8000
-
-# Frontend (another terminal)
-cd /workspace/slotlock/frontend
-npm install && npm run dev
-# → http://localhost:5173
-```
-
-Copy `.env.example` to `.env` and adjust as needed.
+Docker 없이 Postgres/Redis를 직접 띄워서 개발하는 방법은 아래 "로컬 개발" 섹션 참고.
 
 ---
 
-## Architecture
+## 기능 가이드
+
+### 👤 학생(일반 사용자)
+
+- **회원가입 / 로그인** — 이메일 기반 가입, JWT 로그인
+- **공간 목록 / 상세 조회** — 위치, 정원, 운영시간 확인
+- **날짜별 예약 가능 슬롯 조회** — 30분 단위(관리자가 바꾸면 그 값) 슬롯을 오전/오후로 나눠서 표시
+- **슬롯 예약** — 시작 슬롯 클릭 → 끝 슬롯 클릭하면 그 사이가 자동으로 선택됨(한 칸씩 클릭할 필요 없음). 이용 인원도 같이 입력(공간 정원 이내로 제한). 하루 예약 가능 시간(기본 2시간)을 넘으면 거부됨
+- **내 예약 목록** — 상태별(확정/체크인/완료/취소/노쇼) 확인, 인원수 같이 표시
+- **체크인** — 예약 시작 시각 앞뒤 유예시간(기본 15분) 안에서만 가능
+- **조기 퇴실** — 체크인한 예약을 일찍 끝내서, 남은 시간을 다른 사람이 바로 예약할 수 있게 풀어줌
+- **예약 취소**
+
+### 🛠 관리자 (학생 기능 전부 + 아래 추가)
+
+관리자로 로그인하면 상단 네비게이션에 **관리자 설정**, **예약 현황** 메뉴가 추가로 보입니다.
+
+- **관리자 설정** (`/admin/settings`) — 하루 예약 한도(시간), 슬롯 단위(30분/1시간), 체크인 유예 시간을 실시간으로 변경. 서버 재배포 없이 바로 모든 사용자에게 적용됨
+- **예약 현황 대시보드** (`/admin/reservations`) — 날짜·공간별로 전체 예약을 한눈에 조회. 예약자 이름과 인원("OOO 외 N명")이 보이고, 어떤 예약이든 임의로 취소 가능
+- **시간대 차단** — 공간 상세 페이지에서 슬롯 구간을 고르고 사유(예: "학교 수업")를 적어 차단. 실제 예약처럼 그 시간대를 막아버리지만(다른 사람은 예약 불가), 일반 예약과는 다르게 취급됨:
+  - 차단을 건 관리자 본인의 하루 이용 한도에는 포함되지 않음
+  - 체크인하지 않았다고 자동으로 "노쇼" 처리되어 슬롯이 풀리는 일이 없음 (수업이 진행 중인데 15분 뒤에 저절로 예약 가능 상태로 바뀌는 버그를 방지)
+  - 관리자 본인의 "내 예약" 목록에는 안 뜸(개인 예약이 아니므로)
+- **공간 생성** (`POST /api/spaces`) — 현재는 API로만 가능, 화면은 아직 없음
+
+### ⚙️ 시스템이 자동으로 처리하는 것
+
+- **노쇼 자동 처리** — 체크인 유예 시간이 지나도록 체크인 안 하면 자동으로 "노쇼"로 바뀌고 슬롯이 반환됨 (`backend/scripts/no_show_worker.py`를 주기적으로 돌리거나, 관리자가 `POST /api/admin/run-no-show-worker`로 수동 실행)
+- **캐시 자동 갱신** — 예약 생성/취소/체크인/체크아웃/차단 등 상태가 바뀔 때마다 해당 공간의 슬롯 캐시(Redis)를 자동으로 지워서, 방금 예약한 슬롯이 캐시 때문에 계속 "예약 가능"으로 보이는 일이 없게 함
+
+---
+
+## 아키텍처
 
 ```
 React (Vite) ──JWT──▶ FastAPI ──SQLAlchemy──▶ PostgreSQL 16
@@ -100,96 +78,123 @@ React (Vite) ──JWT──▶ FastAPI ──SQLAlchemy──▶ PostgreSQL 16
                          └── Redis (slot cache, optional)
 ```
 
-| Layer | Responsibility |
-|-------|----------------|
-| **Auth** | Register / login, JWT bearer (`/api/auth/*`) |
-| **Spaces** | List / detail / admin create; slot grid by date |
-| **Reservations** | Create / cancel / check-in / check-out (early release) / mine |
-| **DB invariant** | `EXCLUDE USING gist (space_id WITH =, tstzrange(start_at,end_at,'[)') WITH &&) WHERE status IN ('confirmed','checked_in')` |
-| **Business** | Operating hours, daily ≤ 2h limit, half-open ranges so adjacent slots OK |
-| **Cache** | Redis TTL cache for `GET /spaces/{id}/slots` (disabled gracefully if Redis down) |
+| 계층 | 역할 |
+|---|---|
+| **Auth** | 회원가입/로그인, JWT bearer (`/api/auth/*`) |
+| **Spaces** | 목록/상세 조회, 관리자 생성, 날짜별 슬롯 |
+| **Reservations** | 생성/취소/체크인/체크아웃/내 예약 |
+| **Admin** | 설정 변경, 예약 현황, 시간대 차단 (`/api/admin/*`) |
+| **DB 불변식** | `EXCLUDE USING gist (space_id WITH =, tstzrange(start_at,end_at,'[)') WITH &&) WHERE status IN ('confirmed','checked_in')` |
+| **Cache** | `GET /spaces/{id}/slots` 결과를 Redis에 TTL 15초로 캐싱 (Redis 다운되면 캐시 없이 정상 동작) |
 
-Module layout (`backend/app/`): `api/`, `core/`, `models/`, `schemas/`, `services/`, `scripts/`.
+모듈 구조(`backend/app/`): `api/`, `core/`, `models/`, `schemas/`, `services/`, `scripts/`.
 
 ---
 
-## How to demo the 409 conflict
+## 동시성(Concurrency) 처리
 
-1. Login as `student@slotlock.local`.
-2. Open a space → pick tomorrow’s date → book e.g. 10:00–11:00.
-3. Open an **incognito** window, register another user (or use a second account).
-4. Try the **same** space and overlapping time → UI shows **409 Conflict**.
+이 프로젝트의 핵심은 "여러 요청을 동시에 받는 것"과 "데이터가 꼬이지 않는 것"을 구분해서 다루는 데 있습니다.
 
-CLI / curl (two shells racing):
+- **여러 요청 동시 처리**: uvicorn(uvloop)이 비동기 이벤트 루프로 다중 연결을 받고, 동기 핸들러(DB I/O가 blocking이라)는 스레드풀에 위임됨
+- **이중예약 방지**: PostgreSQL `EXCLUDE USING gist` 제약이 DB 레벨에서 원자적으로 처리 — 두 요청이 정확히 동시에 INSERT해도 하나만 성공하고 나머지는 `IntegrityError` → API가 409로 변환
+- **하루 이용 한도 레이스**: DB 제약만으로는 못 막는 경우(겹치지 않는 다른 시간대 두 건을 동시에 예약)라서, `pg_advisory_xact_lock(user_id)`로 같은 유저의 예약 생성 트랜잭션을 직렬화
+- **취소/체크인/체크아웃 동시 조작**: `SELECT ... FOR UPDATE`로 행 잠금을 걸어서 lost-update 방지
+
+`test_concurrency.py`에서 여러 스레드가 실제로 같은 API를 동시에 때리는 방식으로 검증합니다.
+
+---
+
+## 409 충돌 데모
+
+1. `student@slotlock.local`로 로그인
+2. 공간 하나 열고 → 내일 날짜 → 예: 10:00–11:00 예약
+3. 시크릿 창으로 다른 계정 로그인
+4. **같은 공간·겹치는 시간**으로 예약 시도 → 화면에 **409 Conflict**
+
+CLI로 확인(터미널 두 개로 경쟁):
 
 ```bash
 TOKEN_A=$(curl -s -X POST http://localhost:8000/api/auth/login \
   -d 'username=student@slotlock.local&password=student123' | jq -r .access_token)
-# register second user, get TOKEN_B, then:
+# 두 번째 유저 등록 후 TOKEN_B 받아서:
 curl -s -o /tmp/a.json -w "%{http_code}" -X POST http://localhost:8000/api/reservations \
   -H "Authorization: Bearer $TOKEN_A" -H 'Content-Type: application/json' \
-  -d '{"space_id":1,"start_at":"2026-09-16T10:00:00+09:00","end_at":"2026-09-16T11:00:00+09:00"}'
+  -d '{"space_id":1,"start_at":"2026-09-20T10:00:00+09:00","end_at":"2026-09-20T11:00:00+09:00"}'
 ```
 
-Automated proof:
+자동 증명:
 
 ```bash
 cd backend && pytest -v
-# includes concurrent ThreadPool: exactly one 201, two 409, one DB row
+# 여러 스레드가 동시에 같은 슬롯을 예약 → 201 하나, 409 나머지, DB엔 중복 행 없음
 ```
 
 ---
 
-## Tests
+## 테스트
 
 ```bash
-cd /workspace/slotlock/backend
+cd backend
 export TEST_DATABASE_URL=postgresql+psycopg2://slotlock:slotlock@localhost:5432/slotlock_test
 export REDIS_ENABLED=false
 pytest -v
 ```
 
-Coverage:
+커버리지(31개 케이스):
 
-- Exact / partial overlap → 409  
-- Adjacent half-open `[10,11)` + `[11,12)` → both 201  
-- Cancel frees slot  
-- Early check-out (checked-in → completed) frees the remaining time for others to book  
-- Different spaces may overlap  
-- **Concurrency:** 3 parallel bookings → 1 success, 2×409, no duplicate rows  
+- 겹침/부분 겹침 → 409, 인접 half-open 슬롯 → 둘 다 201
+- 취소/조기 퇴실이 슬롯을 실제로 반환하는지
+- **동시성**: 여러 스레드 동시 예약 → 1건만 성공, 하루 한도 레이스도 재현·검증
+- 관리자 설정 변경이 실제 예약 로직에 즉시 반영되는지
+- 인원수(정원 초과 거부), 관리자 예약 현황 목록
+- 관리자 시간대 차단(이중예약 방지, 본인 한도 미포함, 노쇼 미대상, 체크인 불가)
 
 ---
 
-## Migrations
+## 마이그레이션
 
 ```bash
 cd backend
 alembic upgrade head
-# revision 001: users, spaces, reservations + excl_no_overlap_active
-# revision 002: app_settings (admin-tunable business rules)
-# revision 003: reservations.party_size
+# 001: users, spaces, reservations + excl_no_overlap_active
+# 002: app_settings (관리자가 바꿀 수 있는 운영 규칙)
+# 003: reservations.party_size
+# 004: reservations.is_admin_block
 ```
 
-API lifespan also runs `CREATE EXTENSION btree_gist`, `create_all`, and seed if empty (convenient for demos).
+API 기동 시 `CREATE EXTENSION btree_gist` → `create_all` → 비어있으면 시드 데이터 생성까지 자동으로 실행됩니다(데모 편의용).
 
-**Gotcha:** `create_all` only creates *missing tables* — it never `ALTER`s a table that already exists. So a running dev DB that was bootstrapped by `create_all` (the docker-compose flow above) needs `alembic upgrade head` run against it (or a manual `ALTER TABLE`) whenever a migration adds a column to an existing table, e.g. `party_size` in 003 or `is_admin_block` in 004. A brand-new table (like `app_settings` in 002) is unaffected since `create_all` does create those.
+**주의:** `create_all`은 **없는 테이블만** 만들고, 이미 있는 테이블에 컬럼을 추가해주지 않습니다. 그래서 `create_all`로 이미 떠 있던 개발 DB에 새 컬럼이 추가되는 마이그레이션(003, 004)이 생기면, 그 DB엔 `alembic upgrade head`를 따로 돌리거나 수동 `ALTER TABLE`이 필요합니다. 새 테이블(002의 `app_settings`)은 `create_all`이 알아서 만들어주므로 상관없습니다.
 
 ---
 
-## Stretch features included
+## 로컬 개발 (Docker 없이, Postgres/Redis는 이미 떠 있다고 가정)
 
-- Redis cache for slot queries  
-- Daily 2-hour booking limit  
-- Check-in endpoint + admin `POST /api/admin/run-no-show-worker` (marks overdue confirmed → `no_show`)  
-- Check-out endpoint (`POST /api/reservations/{id}/check-out`): ends a checked-in reservation early (status → `completed`), immediately freeing the remaining time for others to book  
-- Basic admin: `GET /api/admin/stats`, `POST /api/spaces` (admin JWT)  
-- Runtime-editable business rules (`GET /api/admin/settings`, admin-only `PUT /api/admin/settings`): daily booking limit, slot size, check-in grace period — persisted in `app_settings`, with an admin-only **관리자 설정** page in the frontend (`/admin/settings`)  
-- Party size per reservation (`party_size`, capped by the space's capacity) and an admin **예약 현황** dashboard (`/admin/reservations`, `GET /api/admin/reservations?date=&space_id=`): who booked what with how many people ("OOO 외 N명"), with one-click admin cancel on any reservation  
-- Admin time-blocking (`POST /api/admin/blocks`): an admin picks a slot range on a space and blocks it off with a reason (e.g. a school class) instead of making a real booking — reuses the same exclusion-constraint/slot-availability machinery so a block still prevents double-booking, but skips the per-user daily-hour limit and party size, and is excluded from the blocking admin's own "내 예약" list  
+```bash
+# 백엔드
+cd backend
+python -m venv ../../slotlock-venv && source ../../slotlock-venv/bin/activate
+pip install -r requirements.txt
+export DATABASE_URL=postgresql+psycopg2://slotlock:slotlock@localhost:5432/slotlock
+export REDIS_URL=redis://localhost:6379/0
+export PYTHONPATH=.
+alembic upgrade head   # 또는 기동 시 create_all + seed에 맡겨도 됨
+python scripts/seed.py
+uvicorn app.main:app --reload --port 8000
 
-## Out of scope / follow-ups
+# 프론트엔드 (다른 터미널)
+cd frontend
+npm install && npm run dev
+# → http://localhost:5173
+```
 
-Payments, SSO, mobile apps, SMS, floor plans, Jenkins / SonarQube / Grafana / JMeter full stacks — suitable next milestones for the course report.
+`.env.example`을 `.env`로 복사해서 필요하면 값을 바꾸세요.
+
+---
+
+## 범위 밖 / 다음 단계
+
+Payments, SSO, 모바일 앱, SMS, 좌석 배치도, 공간 운영시간 수정 화면, 공간별 이용률 통계, Jenkins / SonarQube / Prometheus·Grafana / Loki / JMeter — 과제 계획서(팀 R&R)상 이후 주차에 다룰 항목들입니다.
 
 ---
 
